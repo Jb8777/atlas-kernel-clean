@@ -13,12 +13,13 @@ from core.logger import get_logger
 
 log = get_logger(__name__)
 
+_DEFAULT_MODEL = "openai/gpt-3.5-turbo"
+
 
 @dataclass(frozen=True)
 class Settings:
     """
     Environment-driven settings.
-
     Do not place secrets in git; use .env for local development only.
     """
 
@@ -43,7 +44,6 @@ def _as_path(value: str | None, default: Path) -> Path:
 def get_settings() -> Settings:
     """
     Load environment variables (and .env if present) and return Settings.
-
     Cached for process consistency.
     """
     # Safe if .env doesn't exist; load_dotenv() simply does nothing.
@@ -52,7 +52,6 @@ def get_settings() -> Settings:
     app_env = (os.getenv("APP_ENV", "development") or "development").strip()
     app_name = (os.getenv("APP_NAME", "AtlasKernel") or "AtlasKernel").strip()
     log_level = (os.getenv("LOG_LEVEL", "INFO") or "INFO").strip()
-
     config_path = _as_path(os.getenv("CONFIG_PATH"), DEFAULT_CONFIG_PATH)
     logs_dir = _as_path(os.getenv("LOGS_DIR"), DEFAULT_LOGS_DIR)
 
@@ -70,8 +69,8 @@ def load_json_config(path: Path | str | None = None) -> dict[str, Any]:
     Load JSON config with safe fallbacks.
 
     Behavior:
-    - missing file => {}
-    - invalid JSON => {}
+    - missing file  => {}
+    - invalid JSON  => {}
     - non-object root => {}
     """
     settings = get_settings()
@@ -81,14 +80,11 @@ def load_json_config(path: Path | str | None = None) -> dict[str, Any]:
         if not cfg_path.exists():
             log.warning("config missing; using empty config", extra={"path": str(cfg_path)})
             return {}
-
         raw = cfg_path.read_text(encoding="utf-8")
         parsed = json.loads(raw)
-
         if not isinstance(parsed, dict):
             log.warning("config root is not an object; using empty config", extra={"path": str(cfg_path)})
             return {}
-
         return parsed
     except json.JSONDecodeError:
         log.exception("invalid json config; using empty config", extra={"path": str(cfg_path)})
@@ -96,3 +92,37 @@ def load_json_config(path: Path | str | None = None) -> dict[str, Any]:
     except Exception:
         log.exception("failed to load config; using empty config", extra={"path": str(cfg_path)})
         return {}
+
+
+def get_model_for_route(route: str) -> str:
+    """
+    Return the OpenRouter model name for a given route, as specified in
+    config/model_router.json under the "models" key.
+
+    Falls back to _DEFAULT_MODEL if:
+    - the config file is missing or malformed
+    - the route key is absent from the models section
+    - the value is not a non-empty string
+
+    Example config/model_router.json shape::
+
+        {
+          "models": {
+            "code":     "openai/gpt-4o",
+            "research": "openai/gpt-4o",
+            "ops":      "openai/gpt-4o",
+            "general":  "openai/gpt-3.5-turbo"
+          }
+        }
+    """
+    try:
+        cfg = load_json_config()
+        models = cfg.get("models", {})
+        if not isinstance(models, dict):
+            return _DEFAULT_MODEL
+        value = models.get(route)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    except Exception:
+        log.exception("get_model_for_route failed; using default model")
+    return _DEFAULT_MODEL
